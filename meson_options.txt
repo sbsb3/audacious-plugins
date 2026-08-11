@@ -129,6 +129,8 @@ option('filebrowser', type: 'boolean', value: true,
        description: 'Whether the File Browser plugin is enabled')
 option('hotkey', type: 'boolean', value: true,
        description: 'Whether the Global Hotkeys plugin (X11) is enabled')
+option('jumpin', type: 'boolean', value: true,
+       description: 'Whether the Jump In plugin is enabled')
 option('lirc', type: 'boolean', value: true,
        description: 'Whether the LIRC plugin is enabled')
 option('lyrics', type: 'boolean', value: true,
@@ -155,6 +157,8 @@ option('statusicon', type: 'boolean', value: true,
        description: 'Whether the Status Icon plugin is enabled')
 option('streamtuner', type: 'boolean', value: false,
        description: 'Whether the Stream Tuner plugin is enabled')
+option('waveform', type: 'boolean', value: true,
+       description: 'Whether the Waveform Seekbar plugin is enabled (GTK, FFmpeg and sqlite3 required)')
 
 
 # effect plugins

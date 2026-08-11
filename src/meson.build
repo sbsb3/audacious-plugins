@@ -258,6 +258,10 @@ if conf.has('USE_GTK')
   if get_option('vumeter')
     subdir('vumeter')
   endif
+
+  if get_option('waveform')
+    subdir('waveform')
+  endif
 endif
 
 
@@ -268,6 +272,10 @@ endif
 
 if get_option('mac-now-playing') and have_darwin
   subdir('mac-now-playing')
+endif
+
+if get_option('jumpin')
+  subdir('jumpin')
 endif
 
 if get_option('mpris2') and not have_windows
