@@ -19,6 +19,7 @@
 */
 
 #include <glib.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <libaudcore/drct.h>
@@ -31,24 +32,108 @@
 #include "aosd_cfg.h"
 #include "aosd_osd.h"
 
+/* Case-insensitive strstr(), since plain strcasestr() isn't standard. */
+static const char * aosd_strcasestr (const char * haystack, const char * needle)
+{
+  size_t needle_len = strlen (needle);
+  for (const char * p = haystack; * p; p ++)
+  {
+    if (! g_ascii_strncasecmp (p, needle, needle_len))
+      return p;
+  }
+  return nullptr;
+}
+
+/* Decoders spell out codec names very differently -- e.g. the built-in FLAC
+ * plugin sets "Free Lossless Audio Codec (FLAC)", ffmpeg's long_name is
+ * "FLAC (Free Lossless Audio Codec)", and mpg123 gives "MPEG-1 layer 3".
+ * This maps such names down to the short form most people actually use
+ * (FLAC, MP3, AAC, ...), falling back to the original string unchanged if
+ * nothing recognizable is found. */
+static StringBuf aosd_trigger_alias_codec (const char * codec)
+{
+  /* "MPEG-<version> layer <n>" (mpg123) */
+  const char * mpeg = aosd_strcasestr (codec, "mpeg");
+  const char * layer = mpeg ? aosd_strcasestr (mpeg, "layer") : nullptr;
+  if (layer)
+  {
+    int n = atoi (layer + strlen ("layer"));
+    if (n >= 1 && n <= 3)
+      return str_printf ("MP%d", n);
+  }
+
+  /* "SHORT (long description)", e.g. ffmpeg's "FLAC (Free Lossless ...)" */
+  const char * open_paren = strchr (codec, '(');
+  if (open_paren && open_paren > codec && open_paren[-1] == ' ')
+  {
+    StringBuf lead = str_copy (codec, open_paren - 1 - codec);
+    if (lead.len () > 0 && lead.len () <= 8 && ! strpbrk (lead, " \t("))
+      return lead;
+  }
+
+  /* "long description (SHORT)", e.g. the built-in flac plugin */
+  int len = strlen (codec);
+  if (len > 2 && codec[len - 1] == ')')
+  {
+    const char * last_open = strrchr (codec, '(');
+    if (last_open && last_open > codec && last_open[-1] == ' ')
+    {
+      StringBuf trail = str_copy (last_open + 1, codec + len - 1 - (last_open + 1));
+      if (trail.len () > 0 && trail.len () <= 8 && ! strpbrk (trail, " \t("))
+        return trail;
+    }
+  }
+
+  /* plain names with no parenthesized short form */
+  static const struct { const char * needle; const char * alias; } known[] =
+  {
+    { "opus", "Opus" },
+    { "vorbis", "Vorbis" },
+    { "flac", "FLAC" },
+    { "wavpack", "WavPack" },
+    { "monkey", "APE" },
+    { "musepack", "MPC" },
+    { "true audio", "TTA" },
+    { "trueaudio", "TTA" },
+    { "windows media", "WMA" },
+    { "apple lossless", "ALAC" },
+    { "advanced audio coding", "AAC" },
+    { "aac", "AAC" },
+    { "mpeg audio layer 3", "MP3" },
+    { "mpeg audio layer 2", "MP2" },
+    { "mpeg audio layer 1", "MP1" },
+  };
+
+  for (auto & k : known)
+  {
+    if (aosd_strcasestr (codec, k.needle))
+      return str_copy (k.alias);
+  }
+
+  return str_copy (codec);
+}
+
 /* One entry of the tiny template language used to render
    aosd_cfg_osd_text_t::format (see aosd_cfg.h for the token syntax). */
+typedef StringBuf (* aosd_format_transform_t) (const char * value);
+
 typedef struct
 {
   const char * name;
   Tuple::Field field;
   bool is_int; /* true for fields read with get_int() (e.g. bitrate) */
+  aosd_format_transform_t transform; /* optional post-processing, or nullptr */
 }
 aosd_format_field_t;
 
 static const aosd_format_field_t aosd_format_fields[] =
 {
-  { "title",   Tuple::Title,   false },
-  { "artist",  Tuple::Artist,  false },
-  { "album",   Tuple::Album,   false },
-  { "codec",   Tuple::Codec,   false },
-  { "quality", Tuple::Quality, false },
-  { "bitrate", Tuple::Bitrate, true  },
+  { "title",   Tuple::Title,   false, nullptr },
+  { "artist",  Tuple::Artist,  false, nullptr },
+  { "album",   Tuple::Album,   false, nullptr },
+  { "codec",   Tuple::Codec,   false, aosd_trigger_alias_codec },
+  { "quality", Tuple::Quality, false, nullptr },
+  { "bitrate", Tuple::Bitrate, true,  nullptr },
 };
 
 /* If <s> starts with "<fieldname>%", appends the field's value (if any) to
@@ -77,7 +162,13 @@ static const char * aosd_trigger_format_field (const char * s, const Tuple & tup
         String value = tuple.get_str (f.field);
         if (value && value[0])
         {
-          g_string_append (line, value);
+          if (f.transform)
+          {
+            StringBuf alias = f.transform (value);
+            g_string_append (line, alias);
+          }
+          else
+            g_string_append (line, value);
           * had_value = true;
         }
       }
