@@ -277,6 +277,14 @@ bool handle_keyevent(Event event)
     }
     break;
 
+    /* Trigger the Jump In plugin's action */
+    case Event::JumpIn:
+    {
+        hook_call("jumpin activate", nullptr);
+        return true;
+    }
+    break;
+
     case Event::ToggleRepeat:
     {
         aud_toggle_bool("repeat");

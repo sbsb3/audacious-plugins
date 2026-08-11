@@ -21,10 +21,14 @@
  *    on the main loop at a fixed rate, so no thread/mutex is needed here.
  *  - DeaDBeeF let external processes trigger the action via
  *    deadbeef->plugin.exec_cmdline (`deadbeef --plugin=jumpin`). Audacious
- *    has no equivalent generic plugin-action IPC, so the same timer instead
- *    watches the mtime of a small trigger file
- *    ($XDG_DATA_HOME/audacious/jumpin-trigger); bind a global hotkey in
- *    your desktop environment to `touch` it.
+ *    has no equivalent generic plugin-action IPC. Two routes are provided
+ *    instead: (1) the "jumpin activate" hook, which the Global Hotkeys /
+ *    Qt Global Hotkeys plugins call for their own "Jump In (Next Track)"
+ *    binding -- the normal way to assign a system-wide hotkey; and (2) for
+ *    triggering from outside Audacious entirely (a desktop-environment
+ *    hotkey, a script), the same timer watches the mtime of a small trigger
+ *    file ($XDG_DATA_HOME/audacious/jumpin-trigger) -- bind a hotkey to
+ *    `touch` it.
  *  - DeaDBeeF read/wrote SKIP and JUMPIN as free-form custom tags via
  *    pl_find_meta(). Audacious's Tuple has no such open key/value store, so
  *    values are kept in a small sidecar file instead -- see tagstore.h.
@@ -148,6 +152,12 @@ static void trigger_jump_in()
 }
 
 static void menu_jump_in() { trigger_jump_in(); }
+
+// Lets the Global Hotkeys plugin (GTK or Qt) invoke Jump In without a direct
+// dependency between the two plugins -- same pattern used for AOSD's
+// "aosd toggle" hook. Also usable by any other plugin/script via
+// hook_call("jumpin activate", nullptr).
+static void hook_jump_in(void *, void *) { trigger_jump_in(); }
 
 static void jumpin_playback_ready(void *, void *)
 {
@@ -333,6 +343,7 @@ bool JumpIn::init()
 
     hook_associate("playback ready", jumpin_playback_ready, nullptr);
     hook_associate("playback stop", jumpin_playback_stop, nullptr);
+    hook_associate("jumpin activate", hook_jump_in, nullptr);
 
     timer_add(TimerRate::Hz10, jumpin_timer_tick);
 
@@ -356,6 +367,7 @@ void JumpIn::cleanup()
 
     hook_dissociate("playback ready", jumpin_playback_ready);
     hook_dissociate("playback stop", jumpin_playback_stop);
+    hook_dissociate("jumpin activate", hook_jump_in);
 
     s_seek_pending = false;
     s_skip_end_active = false;

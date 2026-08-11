@@ -86,7 +86,8 @@ static const char * event_desc[] = {N_("Previous track"),
                                     N_("Toggle stop after current"),
                                     N_("Raise player window(s)"),
                                     N_("Previous album"),
-                                    N_("Next album")};
+                                    N_("Next album"),
+                                    N_("Jump In (Next Track)")};
 
 static_assert(aud::n_elems(event_desc) == EVENT_MAX,
               "event_desc table is not up to date");
