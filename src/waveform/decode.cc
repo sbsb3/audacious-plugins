@@ -122,7 +122,8 @@ float sample_at(const AVFrame * frame, int channels, int ch, int i)
 }
 } // namespace
 
-bool waveform_decode_build(const char * path, int num_buckets, WaveData & out)
+bool waveform_decode_build(const char * path, int num_buckets, WaveData & out,
+                            double start_sec, double end_sec)
 {
     if (num_buckets <= 0)
         return false;
@@ -134,6 +135,29 @@ bool waveform_decode_build(const char * path, int num_buckets, WaveData & out)
     int channels = channel_count(ctx.codec);
     if (channels <= 0 || channels > MAX_CHANNELS)
         return false;
+
+    int sample_rate = ctx.codec->sample_rate;
+    if (sample_rate <= 0)
+        return false;
+
+    AVRational time_base = ctx.fmt->streams[ctx.stream_idx]->time_base;
+
+    // For a cuesheet track, seek close to the segment start so decoding a
+    // track near the end of a long album-length file doesn't require
+    // decoding (and discarding) everything before it. This is only a coarse
+    // seek to the nearest keyframe at or before start_sec -- exact trimming
+    // to [start_sec, end_sec) still happens sample-by-sample below, using
+    // each frame's own timestamp, since the keyframe landed on may be well
+    // before the requested point.
+    if (start_sec > 0.0)
+    {
+        int64_t target = (int64_t)(start_sec / av_q2d(time_base));
+        if (av_seek_frame(ctx.fmt, ctx.stream_idx, target, AVSEEK_FLAG_BACKWARD) >= 0)
+            avcodec_flush_buffers(ctx.codec);
+        // If the seek fails (unseekable format/stream), fall through and
+        // decode from the beginning -- the time-based filter below still
+        // produces a correct (if slower to reach) result.
+    }
 
     // Buffer every normalized sample first, then bucket in a second, purely
     // in-memory pass. This is simpler and more robust than bucketing
@@ -148,6 +172,43 @@ bool waveform_decode_build(const char * path, int num_buckets, WaveData & out)
     AVFrame * frame = av_frame_alloc();
     bool stop = false;
 
+    // Running estimate of the current frame's start time, in seconds from
+    // the beginning of the stream -- refreshed from each frame's own
+    // timestamp when available, and advanced by frame size otherwise (some
+    // codecs/containers don't stamp every frame).
+    double stream_time = 0.0;
+    bool have_time = false;
+
+    auto frame_start_time = [&](const AVFrame * f) -> double
+    {
+        int64_t ts = f->best_effort_timestamp;
+        if (ts == AV_NOPTS_VALUE)
+            ts = f->pts;
+        if (ts != AV_NOPTS_VALUE)
+        {
+            have_time = true;
+            return ts * av_q2d(time_base);
+        }
+        return have_time ? stream_time : 0.0;
+    };
+
+    auto consume_frame = [&](const AVFrame * f) -> bool /* false = stop */
+    {
+        double t0 = frame_start_time(f);
+        for (int i = 0; i < f->nb_samples; i++)
+        {
+            double t = t0 + (double)i / sample_rate;
+            if (end_sec >= 0.0 && t >= end_sec)
+                return false;
+            if (t < start_sec)
+                continue;
+            for (int ch = 0; ch < channels; ch++)
+                samples[ch].push_back(sample_at(f, channels, ch, i));
+        }
+        stream_time = t0 + (double)f->nb_samples / sample_rate;
+        return (int)samples[0].size() < MAX_SAMPLES_PER_CHANNEL;
+    };
+
     while (!stop && av_read_frame(ctx.fmt, pkt) >= 0)
     {
         if (pkt->stream_index == ctx.stream_idx)
@@ -156,12 +217,7 @@ bool waveform_decode_build(const char * path, int num_buckets, WaveData & out)
             {
                 while (avcodec_receive_frame(ctx.codec, frame) == 0)
                 {
-                    for (int i = 0; i < frame->nb_samples; i++)
-                    {
-                        for (int ch = 0; ch < channels; ch++)
-                            samples[ch].push_back(sample_at(frame, channels, ch, i));
-                    }
-                    if ((int)samples[0].size() >= MAX_SAMPLES_PER_CHANNEL)
+                    if (!consume_frame(frame))
                     {
                         stop = true;
                         break;
@@ -178,9 +234,8 @@ bool waveform_decode_build(const char * path, int num_buckets, WaveData & out)
         avcodec_send_packet(ctx.codec, nullptr);
         while (avcodec_receive_frame(ctx.codec, frame) == 0)
         {
-            for (int i = 0; i < frame->nb_samples; i++)
-                for (int ch = 0; ch < channels; ch++)
-                    samples[ch].push_back(sample_at(frame, channels, ch, i));
+            if (!consume_frame(frame))
+                break;
         }
     }
 

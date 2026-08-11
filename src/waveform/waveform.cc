@@ -307,10 +307,11 @@ static void queue_all_draws()
         gtk_widget_queue_draw(s_area);
 }
 
-static void build_thread_func(std::string key, std::string path, int num_buckets, bool cache_on)
+static void build_thread_func(std::string key, std::string path, int num_buckets, bool cache_on,
+                               double start_sec, double end_sec)
 {
     WaveData wd;
-    bool ok = waveform_decode_build(path.c_str(), num_buckets, wd);
+    bool ok = waveform_decode_build(path.c_str(), num_buckets, wd, start_sec, end_sec);
     if (ok && cache_on)
         WaveCache::write(key.c_str(), wd.data, wd.data_len, wd.channels);
 
@@ -356,6 +357,22 @@ static void load_track(const String & filename)
         return;
     }
 
+    // Cuesheet tracks (and anything else made of several logical tracks
+    // packed into one physical file) report their own virtual URI as the
+    // playlist filename -- e.g. "file:///path/album.cue?3" -- but the
+    // audio itself lives in a different file, given by Tuple::AudioFile,
+    // with this track's [StartTime, StartTime + duration) as its slice of
+    // it (see src/cue/cue.cc). Decode that underlying file, trimmed to just
+    // this track's segment, instead of trying to open the virtual URI
+    // itself (which isn't a real, openable file) or waveform-ing the
+    // entire physical file it points to.
+    Tuple tuple = aud_drct_get_tuple();
+    String audio_file = tuple.get_str(Tuple::AudioFile);
+    bool is_segment = audio_file && audio_file[0];
+    const String & decode_uri = is_segment ? audio_file : filename;
+    double start_sec = is_segment ? tuple.get_int(Tuple::StartTime) / 1000.0 : 0.0;
+    double end_sec = is_segment ? start_sec + s_cur_duration : -1.0;
+
     int max_minutes = aud_get_int("waveform", "max_file_minutes");
     if (max_minutes > 0 && s_cur_duration > max_minutes * 60.0)
     {
@@ -370,7 +387,7 @@ static void load_track(const String & filename)
         return;
     }
 
-    StringBuf path = uri_to_filename(filename);
+    StringBuf path = uri_to_filename(decode_uri);
     if (!path)
     {
         queue_all_draws();
@@ -378,7 +395,8 @@ static void load_track(const String & filename)
     }
 
     int num_buckets = aud_get_int("waveform", "num_samples");
-    std::thread(build_thread_func, s_cur_key, std::string((const char *)path), num_buckets, cache_on)
+    std::thread(build_thread_func, s_cur_key, std::string((const char *)path), num_buckets, cache_on,
+                start_sec, end_sec)
         .detach();
 
     queue_all_draws();

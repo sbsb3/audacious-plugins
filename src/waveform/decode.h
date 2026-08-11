@@ -24,6 +24,15 @@
 // out.data, free with delete[]). Returns false (leaving `out` untouched) on
 // failure. May take a while for long files -- always call from a
 // background thread.
-bool waveform_decode_build(const char * path, int num_buckets, WaveData & out);
+//
+// `start_sec`/`end_sec` restrict the decode to a sub-range of the file, in
+// seconds from the start of the underlying stream -- used for cuesheet
+// tracks, where several logical tracks share one physical audio file and
+// only one segment of it should be turned into a waveform. `start_sec` <= 0
+// means "from the beginning"; `end_sec` < 0 means "to the end of the file".
+// The `num_buckets` peaks always span exactly [start_sec, end_sec), i.e.
+// the returned waveform is just the requested track, not the whole file.
+bool waveform_decode_build(const char * path, int num_buckets, WaveData & out,
+                            double start_sec = 0.0, double end_sec = -1.0);
 
 #endif // WAVEFORM_DECODE_H
