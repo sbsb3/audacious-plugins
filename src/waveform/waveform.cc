@@ -93,6 +93,7 @@ static const ColorKeys SKIP_START_KEYS = {"color_skip_start_r", "color_skip_star
                                            "color_skip_start_b", "color_skip_start_a"};
 static const ColorKeys SKIP_END_KEYS = {"color_skip_end_r", "color_skip_end_g",
                                          "color_skip_end_b", "color_skip_end_a"};
+static const ColorKeys RULER_KEYS = {"color_rlr_r", "color_rlr_g", "color_rlr_b", "color_rlr_a"};
 
 static void color_row_set_cb(GtkWidget * chooser, void * user_data)
 {
@@ -157,6 +158,7 @@ static void * make_bg_row() { return make_color_row(N_("Background:"), BG_KEYS);
 static void * make_pb_row() { return make_color_row(N_("Playhead:"), PB_KEYS); }
 static void * make_skip_start_row() { return make_color_row(N_("SKIP start marker:"), SKIP_START_KEYS); }
 static void * make_skip_end_row() { return make_color_row(N_("SKIP end marker:"), SKIP_END_KEYS); }
+static void * make_rlr_row() { return make_color_row(N_("Ruler text/ticks:"), RULER_KEYS); }
 
 #endif // USE_GTK
 
@@ -216,6 +218,7 @@ static const char * const waveform_defaults[] = {
     "color_pb_r", "0", "color_pb_g", "255", "color_pb_b", "0", "color_pb_a", "120",
     "color_skip_start_r", "255", "color_skip_start_g", "156", "color_skip_start_b", "0", "color_skip_start_a", "255",
     "color_skip_end_r", "255", "color_skip_end_g", "50", "color_skip_end_b", "50", "color_skip_end_a", "255",
+    "color_rlr_r", "78", "color_rlr_g", "78", "color_rlr_b", "78", "color_rlr_a", "160",
     nullptr
 };
 
@@ -251,6 +254,7 @@ const PreferencesWidget Waveform::widgets[] = {
     WidgetCustomGTK(make_pb_row, WIDGET_CHILD),
     WidgetCustomGTK(make_skip_start_row, WIDGET_CHILD),
     WidgetCustomGTK(make_skip_end_row, WIDGET_CHILD),
+    WidgetCustomGTK(make_rlr_row, WIDGET_CHILD),
     WidgetLabel(N_("Each color swatch's opacity (alpha) can be set from within "
                    "the color picker dialog."), WIDGET_CHILD),
 };
@@ -305,6 +309,8 @@ static void queue_all_draws()
 {
     if (s_area)
         gtk_widget_queue_draw(s_area);
+    if (s_ruler)
+        gtk_widget_queue_draw(s_ruler);
 }
 
 static void build_thread_func(std::string key, std::string path, int num_buckets, bool cache_on,
@@ -418,6 +424,8 @@ static void on_timer_tick(void *)
     adopt_pending_result();
     if (s_area)
         gtk_widget_queue_draw(s_area);
+    if (s_ruler)
+        gtk_widget_queue_draw(s_ruler);
 }
 
 // --- theming --------------------------------------------------------------
@@ -443,9 +451,8 @@ G_GNUC_END_IGNORE_DEPRECATIONS
 }
 
 // User-configured colors (see "Colors" prefs section / make_color_row above)
-// instead of theme-derived ones. The ruler border has no dedicated picker --
-// it stays tied to the waveform color, same relationship as in
-// theme_colors() above.
+// instead of theme-derived ones. The ruler text/ticks have their own picker
+// (RULER_KEYS), independent of the waveform fill color.
 static WaveColors custom_colors()
 {
     auto get = [](const ColorKeys & k)
@@ -459,7 +466,7 @@ static WaveColors custom_colors()
     c.rms = get(RMS_KEYS);
     c.bg = get(BG_KEYS);
     c.pb = get(PB_KEYS);
-    c.rlr = c.fg;
+    c.rlr = get(RULER_KEYS);
     c.skip_start = get(SKIP_START_KEYS);
     c.skip_end = get(SKIP_END_KEYS);
     return c;
