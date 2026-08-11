@@ -191,6 +191,7 @@ static const char * const waveform_defaults[] = {
     "mix_to_mono", "FALSE",
     "display_rms", "TRUE",
     "display_ruler", "TRUE",
+    "dim_played", "TRUE",
     "fill_waveform", "TRUE",
     "soundcloud_style", "FALSE",
     "bars_style", "FALSE",
@@ -221,6 +222,7 @@ static const char * const waveform_defaults[] = {
 const PreferencesWidget Waveform::widgets[] = {
     WidgetLabel(N_("<b>Display</b>")),
     WidgetCheck(N_("Show RMS overlay"), WidgetBool("waveform", "display_rms")),
+    WidgetCheck(N_("Dim already-played portion of waveform"), WidgetBool("waveform", "dim_played")),
     WidgetCheck(N_("Show time ruler"), WidgetBool("waveform", "display_ruler")),
     WidgetSpin(N_("Time ruler font size:"), WidgetInt("waveform", "ruler_font_size"),
                {6, 24, 1, N_("pt")}, WIDGET_CHILD),
@@ -523,15 +525,35 @@ static gboolean draw_waveform(GtkWidget * widget, cairo_t * cr)
         }
     }
 
+    double play_frac = -1;
     if (aud_drct_get_playing() && s_cur_duration > 0)
     {
-        double frac = aud_drct_get_time() / 1000.0 / s_cur_duration;
-        if (frac < 0)
-            frac = 0;
-        if (frac > 1)
-            frac = 1;
-        draw_vline(cr, height, colors.pb, frac * width);
+        play_frac = aud_drct_get_time() / 1000.0 / s_cur_duration;
+        if (play_frac < 0)
+            play_frac = 0;
+        if (play_frac > 1)
+            play_frac = 1;
     }
+
+    // Dim the already-played portion of the waveform -- ported from the
+    // DeaDBeeF original's "Shade waveform" option (waveform.c's surf_shaded
+    // pass). The original rendered a whole second offscreen copy of the
+    // waveform and alpha-blended it in; since this port already rebuilds
+    // render data fresh every draw call (see the comment above the channel
+    // loop), it's simpler to just clip to the played region and paint a
+    // translucent tint in the playhead color over what's already drawn.
+    if (play_frac > 0 && aud_get_bool("waveform", "dim_played"))
+    {
+        cairo_save(cr);
+        cairo_rectangle(cr, 0, 0, play_frac * width, height);
+        cairo_clip(cr);
+        cairo_set_source_rgba(cr, colors.pb.r, colors.pb.g, colors.pb.b, colors.pb.a * 0.35);
+        cairo_paint(cr);
+        cairo_restore(cr);
+    }
+
+    if (play_frac >= 0)
+        draw_vline(cr, height, colors.pb, play_frac * width);
 
     if (aud_get_bool("waveform", "display_skip_markers"))
         draw_skip_markers(cr, width, height, colors);
