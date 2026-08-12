@@ -149,6 +149,8 @@ option('scrobbler2', type: 'boolean', value: true,
        description: 'Whether the Last.fm Scrobbler plugin is enabled')
 option('searchtool', type: 'boolean', value: true,
        description: 'Whether the Search Tool plugin is enabled')
+option('sleep-inhibitor', type: 'boolean', value: true,
+       description: 'Whether the Sleep Inhibitor plugin (systemd-logind) is enabled')
 option('songchange', type: 'boolean', value: true,
        description: 'Whether the Song Change plugin is enabled')
 option('songinfo', type: 'boolean', value: true,

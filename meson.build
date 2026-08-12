@@ -315,6 +315,7 @@ summary({
   'Linux Infrared Remote Control (LIRC)': get_variable('have_lirc', false),
   'MPRIS 2 Server': get_variable('have_mpris2', false),
   'Scrobbler 2.0': get_variable('have_scrobbler2', false),
+  'Sleep Inhibitor': get_variable('have_sleep_inhibitor', false),
   'Song Change': get_option('songchange'),
 }, section: 'General')
 

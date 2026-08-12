@@ -286,6 +286,11 @@ if get_option('scrobbler2')
   subdir('scrobbler2')
 endif
 
+# systemd-logind only; the fd-passing Inhibit call has no Windows equivalent.
+if get_option('sleep-inhibitor') and not have_windows and not have_darwin
+  subdir('sleep-inhibitor')
+endif
+
 if get_option('songchange')
   subdir('songchange')
 endif
