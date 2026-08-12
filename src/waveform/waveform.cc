@@ -488,13 +488,55 @@ static RenderOptions current_render_options()
     return opt;
 }
 
+// Nominal marker thickness, in logical (pre-scale-factor) pixels.
+static constexpr double VLINE_WIDTH = 1.5;
+
+// Rounds a user-space x to the device pixel grid, returning the device-space
+// left edge of the snapped marker. See draw_vline() for why.
+static double snap_vline_x(cairo_t * cr, double x, double * width_out)
+{
+    double dx = x, dy = 0;
+    cairo_user_to_device(cr, &dx, &dy);
+
+    double w = VLINE_WIDTH, wy = 0;
+    cairo_user_to_device_distance(cr, &w, &wy);
+    w = floor(w + 0.5);
+    if (w < 1)
+        w = 1;
+
+    *width_out = w;
+    return floor(dx - w / 2 + 0.5);
+}
+
+// Cairo strokes a line centred on x with antialiasing, so a 1.5px marker at a
+// fractional position lands on two or three pixel columns with whatever
+// coverage the position happens to give. That is invisible for a static
+// marker, but the playback cursor moves continuously across the widget and is
+// redrawn ten times a second, so the coverage pattern churns and the line
+// reads as flickering and slightly changing width as it travels.
+//
+// Snap to whole device pixels and fill a rectangle instead: the marker is then
+// byte-for-byte the same shape wherever it is, and only its position changes.
+// Device space rather than user space so this still holds on a HiDPI
+// (scale-factor 2) surface, where a whole user-space pixel is half a device
+// one.
 static void draw_vline(cairo_t * cr, int height, const Color & c, double x)
 {
+    double w;
+    double dx = snap_vline_x(cr, x, &w);
+
+    double top = 0, bottom = height, ignored = 0;
+    cairo_user_to_device(cr, &ignored, &top);
+    ignored = 0;
+    cairo_user_to_device(cr, &ignored, &bottom);
+
+    cairo_save(cr);
+    cairo_identity_matrix(cr);
+    cairo_set_antialias(cr, CAIRO_ANTIALIAS_NONE);
     cairo_set_source_rgba(cr, c.r, c.g, c.b, c.a);
-    cairo_set_line_width(cr, 1.5);
-    cairo_move_to(cr, x, 0);
-    cairo_line_to(cr, x, height);
-    cairo_stroke(cr);
+    cairo_rectangle(cr, dx, floor(top + 0.5), w, floor(bottom + 0.5) - floor(top + 0.5));
+    cairo_fill(cr);
+    cairo_restore(cr);
 }
 
 static void draw_skip_markers(cairo_t * cr, int width, int height, const WaveColors & colors)
@@ -569,8 +611,15 @@ static gboolean draw_waveform(GtkWidget * widget, cairo_t * cr)
     // translucent tint in the playhead color over what's already drawn.
     if (play_frac > 0 && aud_get_bool("waveform", "dim_played"))
     {
+        // End the tint exactly where the (pixel-snapped) cursor begins, so its
+        // trailing edge doesn't get its own independently-moving antialiased
+        // fringe -- which would flicker for the same reason draw_vline() does.
+        double w, dx = snap_vline_x(cr, play_frac * width, &w);
+        double ux = dx, uy = 0;
+        cairo_device_to_user(cr, &ux, &uy);
+
         cairo_save(cr);
-        cairo_rectangle(cr, 0, 0, play_frac * width, height);
+        cairo_rectangle(cr, 0, 0, ux, height);
         cairo_clip(cr);
         cairo_set_source_rgba(cr, colors.pb.r, colors.pb.g, colors.pb.b, colors.pb.a * 0.35);
         cairo_paint(cr);
