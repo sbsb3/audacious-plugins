@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include <glib.h>
+#include <glib/gstdio.h>
 
 #include <libaudcore/audstrings.h>
 #include <libaudcore/runtime.h>
@@ -16,6 +17,16 @@ namespace JumpinTagStore
 {
 static GKeyFile * s_keyfile = nullptr;
 static String s_path;
+
+// Identity of the file as of the last load or save. The "jumpin" and
+// "waveform" plugins each link their own copy of this store, with their own
+// statics, so neither would ever observe the other's writes if the file were
+// read only once per process -- and the whole point of sharing one file is
+// that a SKIP tag set from the waveform seekbar takes effect in Jump In
+// (and vice versa) without restarting Audacious. Every access therefore
+// re-stats the file and reloads it if it changed underneath us.
+static time_t s_seen_mtime = 0;
+static gint64 s_seen_size = -1;
 
 // SHA-256 of the filename URI, used as the group name. This keeps every
 // possible filename valid as a GKeyFile group (which disallows '[', ']' and
@@ -28,17 +39,50 @@ static String group_for(const char * filename)
     return group;
 }
 
+// Records the file's identity so a later stat can tell whether the other
+// plugin has rewritten it. A missing file is recorded as size -1, which no
+// existing file can compare equal to.
+static void stamp_file()
+{
+    GStatBuf st;
+    if (g_stat(s_path, &st) == 0)
+    {
+        s_seen_mtime = st.st_mtime;
+        s_seen_size = (gint64)st.st_size;
+    }
+    else
+    {
+        s_seen_mtime = 0;
+        s_seen_size = -1;
+    }
+}
+
+static bool file_changed()
+{
+    GStatBuf st;
+    if (g_stat(s_path, &st) != 0)
+        return s_seen_size != -1;
+
+    return st.st_mtime != s_seen_mtime || (gint64)st.st_size != s_seen_size;
+}
+
 static void ensure_loaded()
 {
-    if (s_keyfile)
+    if (!s_path)
+    {
+        StringBuf path = filename_build({aud_get_path(AudPath::UserDir), "jumpin-tags.conf"});
+        s_path = String(path);
+    }
+    else if (s_keyfile && !file_changed())
         return;
 
-    StringBuf path = filename_build({aud_get_path(AudPath::UserDir), "jumpin-tags.conf"});
-    s_path = String(path);
+    if (s_keyfile)
+        g_key_file_free(s_keyfile);
 
     s_keyfile = g_key_file_new();
     // Ignore the error: a missing file just means no tags have been set yet.
     g_key_file_load_from_file(s_keyfile, s_path, G_KEY_FILE_NONE, nullptr);
+    stamp_file();
 }
 
 static void save()
@@ -52,6 +96,8 @@ static void save()
         AUDERR("Failed to save %s: %s\n", (const char *)s_path, error->message);
         g_error_free(error);
     }
+
+    stamp_file();
 }
 
 static String get_value(const char * filename, const char * key)

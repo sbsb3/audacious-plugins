@@ -114,6 +114,13 @@ static double s_seek_offset = 0.0;
 static bool s_skip_end_active = false;
 static double s_skip_end_time = 0.0;
 
+// The SKIP value last acted on for the current track. The tag can change
+// while the track is playing -- the waveform seekbar's "Set SKIP End Here"
+// writes the shared store (see tagstore.h) mid-playback -- so the timer
+// below re-reads it and compares against this instead of latching the value
+// once at "playback ready".
+static String s_skip_seen;
+
 // (time_t) -1 means "not yet observed"; the trigger file's mtime as of the
 // last check otherwise. Never fires on the mtime it has at plugin startup,
 // only on a later change, so a stale trigger file left over from a previous
@@ -167,6 +174,7 @@ static void jumpin_playback_ready(void *, void *)
     bool jumpin_pending = s_seek_pending;
     s_seek_pending = false;
     s_skip_end_active = false;
+    s_skip_seen = String();
 
     String filename = aud_drct_get_filename();
     if (!filename)
@@ -176,6 +184,7 @@ static void jumpin_playback_ready(void *, void *)
     bool jumpin_opt_out = jumpin_val && !strcmp(jumpin_val, "0");
 
     String skip_val = JumpinTagStore::get_skip(filename);
+    s_skip_seen = skip_val;
     SkipSpec spec = parse_skip_tag(skip_val);
 
     Tuple tuple = aud_drct_get_tuple();
@@ -216,6 +225,37 @@ static void jumpin_playback_stop(void *, void *)
 {
     s_seek_pending = false;
     s_skip_end_active = false;
+    s_skip_seen = String();
+}
+
+// Picks up a SKIP tag edited during playback (from the waveform seekbar's
+// right-click menu, or this plugin's own edit dialog) and re-arms the end
+// point accordingly, so the user doesn't have to replay the track to see the
+// trim take effect.
+//
+// A start point can't be applied retroactively, and an end point already
+// behind the playhead is deliberately left for the next playback rather than
+// yanking the user out of the track they are in the middle of auditioning.
+static void refresh_skip_end()
+{
+    String filename = aud_drct_get_filename();
+    if (!filename)
+        return;
+
+    String skip_val = JumpinTagStore::get_skip(filename);
+    if (skip_val == s_skip_seen)
+        return;
+
+    s_skip_seen = skip_val;
+    SkipSpec spec = parse_skip_tag(skip_val);
+
+    int length_ms = aud_drct_get_length();
+    double length = (length_ms > 0) ? length_ms / 1000.0 : 0.0;
+    double now = aud_drct_get_time() / 1000.0;
+
+    s_skip_end_active = spec.has_end && spec.end > now + 0.5 &&
+                        (length <= 0 || spec.end < length);
+    s_skip_end_time = spec.end;
 }
 
 // Polls the mtime of a small trigger file so an external process (e.g. a
@@ -252,9 +292,12 @@ static void jumpin_timer_tick(void *)
 {
     check_trigger_file();
 
-    if (!s_skip_end_active)
+    if (!aud_drct_get_playing())
         return;
-    if (!aud_drct_get_playing() || aud_drct_get_paused())
+
+    refresh_skip_end();
+
+    if (!s_skip_end_active || aud_drct_get_paused())
         return;
 
     if (aud_drct_get_time() >= (int)(s_skip_end_time * 1000.0))
