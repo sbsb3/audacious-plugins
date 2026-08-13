@@ -201,6 +201,7 @@ static const char * const waveform_defaults[] = {
     "display_skip_markers", "TRUE",
     "cache_enabled", "TRUE",
     "scroll_enabled", "TRUE",
+    "swipe_jump_in", "FALSE",
     "num_samples", "3000",
     "max_file_minutes", "60",
     // The original hardcoded this at 8pt, which reads as nearly illegible at
@@ -223,8 +224,10 @@ static const char * const waveform_defaults[] = {
     nullptr
 };
 
-const PreferencesWidget Waveform::widgets[] = {
-    WidgetLabel(N_("<b>Display</b>")),
+// Split across a notebook so the Settings dialog stays short enough that
+// the Close button remains on-screen. The plugin-prefs window is not
+// resizable and has no scroller (see audgui_show_plugin_prefs()).
+static const PreferencesWidget display_page[] = {
     WidgetCheck(N_("Show RMS overlay"), WidgetBool("waveform", "display_rms")),
     WidgetCheck(N_("Dim already-played portion of waveform"), WidgetBool("waveform", "dim_played")),
     WidgetCheck(N_("Show time ruler"), WidgetBool("waveform", "display_ruler")),
@@ -236,19 +239,28 @@ const PreferencesWidget Waveform::widgets[] = {
     WidgetCheck(N_("Bars style (instead of filled outline)"), WidgetBool("waveform", "bars_style")),
     WidgetCheck(N_("SoundCloud-style gradient"), WidgetBool("waveform", "soundcloud_style")),
     WidgetCheck(N_("Downmix to mono"), WidgetBool("waveform", "mix_to_mono")),
-    WidgetLabel(N_("<b>Behavior</b>")),
+};
+
+static const PreferencesWidget behavior_page[] = {
     WidgetCheck(N_("Seek with scroll wheel"), WidgetBool("waveform", "scroll_enabled")),
+    WidgetCheck(N_("Use Jump In when swiping to previous/next track"),
+                WidgetBool("waveform", "swipe_jump_in")),
+    WidgetLabel(N_("Requires the Jump In plugin. Swiping to either edge then "
+                   "lands in the new track at the configured Jump In offset."),
+                WIDGET_CHILD),
     WidgetLabel(N_("<b>Peak cache</b>")),
     WidgetCheck(N_("Cache decoded waveforms on disk"), WidgetBool("waveform", "cache_enabled")),
     WidgetSpin(N_("Peak resolution (samples per track):"), WidgetInt("waveform", "num_samples"),
                {200, 20000, 100}, WIDGET_CHILD),
     WidgetSpin(N_("Skip files longer than (0 = no limit):"), WidgetInt("waveform", "max_file_minutes"),
                {0, 600, 1, N_("minutes")}, WIDGET_CHILD),
-    WidgetLabel(N_("Right-click the waveform to set SKIP start/end trim points "
-                   "(shared with the Jump In plugin). Hold right-click and drag "
-                   "to move the SKIP line; swipe to the left or right edge to "
-                   "go to the previous or next track.")),
-    WidgetLabel(N_("<b>Colors</b>")),
+    WidgetLabel(N_("<b>SKIP / swipe</b>")),
+    WidgetLabel(N_("Right-click to set SKIP start/end (shared with Jump In). "
+                   "Hold and drag to move the SKIP line; swipe to either edge "
+                   "for previous/next track.")),
+};
+
+static const PreferencesWidget colors_page[] = {
     WidgetCheck(N_("Use custom colors instead of the GTK theme"),
                 WidgetBool("waveform", "custom_colors")),
     WidgetCustomGTK(make_fg_row, WIDGET_CHILD),
@@ -260,6 +272,16 @@ const PreferencesWidget Waveform::widgets[] = {
     WidgetCustomGTK(make_rlr_row, WIDGET_CHILD),
     WidgetLabel(N_("Each color swatch's opacity (alpha) can be set from within "
                    "the color picker dialog."), WIDGET_CHILD),
+};
+
+static const NotebookTab waveform_tabs[] = {
+    {N_("Display"), {display_page}},
+    {N_("Behavior"), {behavior_page}},
+    {N_("Colors"), {colors_page}},
+};
+
+const PreferencesWidget Waveform::widgets[] = {
+    WidgetNotebook({{waveform_tabs}})
 };
 
 const PluginPreferences Waveform::prefs = {{widgets}};
@@ -919,12 +941,28 @@ static void finish_right_gesture()
     s_popup_marker_active = false;
 }
 
+static bool jumpin_plugin_enabled()
+{
+    PluginHandle * plugin = aud_plugin_lookup_basename("jumpin");
+    return plugin && aud_plugin_get_enabled(plugin);
+}
+
 static void apply_edge_swipe(int dir)
 {
     s_edge_gesture_done = true;
     s_popup_marker_active = false;
     s_skip_drag = SkipDragTarget::None;
     queue_all_draws();
+
+    // Jump In owns the randomized-offset seek; the waveform plugin just
+    // asks it to fire (next or previous) when the pref is on and the
+    // plugin is actually loaded. Otherwise this is a plain track skip.
+    if (aud_get_bool("waveform", "swipe_jump_in") && jumpin_plugin_enabled())
+    {
+        hook_call(dir < 0 ? "jumpin activate prev" : "jumpin activate", nullptr);
+        return;
+    }
+
     if (dir < 0)
         aud_drct_pl_prev();
     else
