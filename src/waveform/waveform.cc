@@ -608,7 +608,10 @@ static gboolean draw_waveform(GtkWidget * widget, cairo_t * cr)
     // waveform and alpha-blended it in; since this port already rebuilds
     // render data fresh every draw call (see the comment above the channel
     // loop), it's simpler to just clip to the played region and paint a
-    // translucent tint in the playhead color over what's already drawn.
+    // translucent tint over what's already drawn. The tint is the background
+    // color, not the (bright, saturated) playhead color -- blending toward
+    // bg is what actually darkens/mutes the waveform under it; blending
+    // toward an accent color would instead lighten a dark theme's waveform.
     if (play_frac > 0 && aud_get_bool("waveform", "dim_played"))
     {
         // End the tint exactly where the (pixel-snapped) cursor begins, so its
@@ -621,7 +624,7 @@ static gboolean draw_waveform(GtkWidget * widget, cairo_t * cr)
         cairo_save(cr);
         cairo_rectangle(cr, 0, 0, ux, height);
         cairo_clip(cr);
-        cairo_set_source_rgba(cr, colors.pb.r, colors.pb.g, colors.pb.b, colors.pb.a * 0.35);
+        cairo_set_source_rgba(cr, colors.bg.r, colors.bg.g, colors.bg.b, 0.45);
         cairo_paint(cr);
         cairo_restore(cr);
     }
