@@ -4,9 +4,10 @@
  *
  * Port of the DeaDBeeF plugin ddb_waveform_seekbar: a dockable panel that
  * shows a min/max/RMS waveform of the playing track in place of a plain
- * seek slider, with click/drag-to-seek, scroll-to-seek, and a right-click
- * menu to set SKIP trim points (shared with the "jumpin" plugin -- see
- * tagstore.h).
+ * seek slider, with click/drag-to-seek, scroll-to-seek, a right-click menu
+ * to set SKIP trim points (shared with the "jumpin" plugin -- see
+ * tagstore.h), right-drag to move the SKIP line, and a right-swipe to
+ * either edge to change tracks.
  *
  * Differences from the DeaDBeeF original, forced by API differences (see
  * the port's plan document for the full analysis):
@@ -244,7 +245,9 @@ const PreferencesWidget Waveform::widgets[] = {
     WidgetSpin(N_("Skip files longer than (0 = no limit):"), WidgetInt("waveform", "max_file_minutes"),
                {0, 600, 1, N_("minutes")}, WIDGET_CHILD),
     WidgetLabel(N_("Right-click the waveform to set SKIP start/end trim points "
-                   "(shared with the Jump In plugin).")),
+                   "(shared with the Jump In plugin). Hold right-click and drag "
+                   "to move the SKIP line; swipe to the left or right edge to "
+                   "go to the previous or next track.")),
     WidgetLabel(N_("<b>Colors</b>")),
     WidgetCheck(N_("Use custom colors instead of the GTK theme"),
                 WidgetBool("waveform", "custom_colors")),
@@ -290,6 +293,31 @@ static bool s_seeking = false;
 static double s_seek_x = 0;
 static bool s_popup_marker_active = false;
 static double s_popup_click_x = 0;
+
+// Right-button gesture: drag moves the SKIP placement line (or an existing
+// start/end marker if the press landed on one). Swiping that drag to the
+// left/right edge of the widget skips to the previous/next track instead
+// of opening the menu.
+enum class SkipDragTarget
+{
+    None,
+    Start,
+    End
+};
+
+static bool s_rbtn_down = false;
+static double s_rbtn_start_x = 0;
+static bool s_edge_gesture_done = false;
+static SkipDragTarget s_skip_drag = SkipDragTarget::None;
+
+// How close a press must be to an existing SKIP marker to grab it, in
+// widget pixels. Markers are a couple of pixels wide, so this is the
+// actual hit target.
+static constexpr double SKIP_GRAB_PX = 10.0;
+
+// Click vs. drag: below this, a right-release is a click (open the menu)
+// even if the press landed on a marker.
+static constexpr double SKIP_CLICK_PX = 6.0;
 
 // Background build coordination. String/StringBuf are not safe to touch
 // off the main thread (libaudcore's string pool takes no locks), so
@@ -356,6 +384,7 @@ static void load_track(const String & filename)
     s_cur_duration = aud_drct_get_length() / 1000.0;
     s_popup_marker_active = false;
     s_seeking = false;
+    s_skip_drag = SkipDragTarget::None;
 
     if (!filename || !str_has_prefix_nocase(filename, "file://"))
     {
@@ -549,9 +578,11 @@ static void draw_skip_markers(cairo_t * cr, int width, int height, const WaveCol
         return;
 
     SkipSpec spec = parse_skip_tag(skip);
-    if (spec.has_start)
+    // The marker being dragged is drawn from s_popup_click_x instead, so it
+    // tracks the pointer rather than sitting at its last committed position.
+    if (spec.has_start && s_skip_drag != SkipDragTarget::Start)
         draw_vline(cr, height, colors.skip_start, (spec.start / s_cur_duration) * width);
-    if (spec.has_end)
+    if (spec.has_end && s_skip_drag != SkipDragTarget::End)
         draw_vline(cr, height, colors.skip_end, (spec.end / s_cur_duration) * width);
 }
 
@@ -636,7 +667,11 @@ static gboolean draw_waveform(GtkWidget * widget, cairo_t * cr)
         draw_skip_markers(cr, width, height, colors);
 
     if (s_popup_marker_active)
-        draw_vline(cr, height, colors.skip_start, s_popup_click_x);
+    {
+        const Color & marker = (s_skip_drag == SkipDragTarget::End) ? colors.skip_end
+                                                                    : colors.skip_start;
+        draw_vline(cr, height, marker, s_popup_click_x);
+    }
 
     if (s_seeking)
         draw_vline(cr, height, colors.pb, s_seek_x);
@@ -780,12 +815,138 @@ static void build_popup_menu()
 
 // --- mouse ----------------------------------------------------------------
 
-static gboolean on_button_press(GtkWidget *, GdkEventButton * event, gpointer)
+static double clamp_widget_x(double x, int width)
+{
+    if (x < 0)
+        return 0;
+    if (width > 0 && x > width)
+        return width;
+    return x;
+}
+
+// Edge zones and the minimum travel needed to treat a right-drag as a
+// track-skip rather than a SKIP-line placement. Scaled with the widget so
+// a very narrow panel still has a usable interior.
+static double edge_zone_px(int width)
+{
+    double z = width * 0.04;
+    if (z < 8)
+        z = 8;
+    if (z > 24)
+        z = 24;
+    return z;
+}
+
+static double min_swipe_px(int width)
+{
+    double s = width * 0.08;
+    if (s < 24)
+        s = 24;
+    return s;
+}
+
+static SkipDragTarget hit_test_skip_marker(double x, int width)
+{
+    if (width <= 0 || s_cur_duration <= 0 || !s_cur_filename)
+        return SkipDragTarget::None;
+
+    String skip = JumpinTagStore::get_skip(s_cur_filename);
+    if (!skip || !skip[0])
+        return SkipDragTarget::None;
+
+    SkipSpec spec = parse_skip_tag(skip);
+    double best = SKIP_GRAB_PX + 1;
+    SkipDragTarget hit = SkipDragTarget::None;
+
+    if (spec.has_start)
+    {
+        double mx = (spec.start / s_cur_duration) * width;
+        double d = fabs(x - mx);
+        if (d <= SKIP_GRAB_PX && d < best)
+        {
+            best = d;
+            hit = SkipDragTarget::Start;
+        }
+    }
+    if (spec.has_end)
+    {
+        double mx = (spec.end / s_cur_duration) * width;
+        double d = fabs(x - mx);
+        if (d <= SKIP_GRAB_PX && d < best)
+        {
+            best = d;
+            hit = SkipDragTarget::End;
+        }
+    }
+    return hit;
+}
+
+// Once the pointer has moved enough to count as a drag (not a click), pick
+// which existing SKIP marker to move: the one under the press if any,
+// otherwise the only marker, otherwise the nearer of the two.
+static SkipDragTarget pick_skip_drag_target(double x, int width)
+{
+    SkipDragTarget hit = hit_test_skip_marker(x, width);
+    if (hit != SkipDragTarget::None)
+        return hit;
+
+    if (width <= 0 || s_cur_duration <= 0 || !s_cur_filename)
+        return SkipDragTarget::None;
+
+    String skip = JumpinTagStore::get_skip(s_cur_filename);
+    if (!skip || !skip[0])
+        return SkipDragTarget::None;
+
+    SkipSpec spec = parse_skip_tag(skip);
+    if (spec.has_start && !spec.has_end)
+        return SkipDragTarget::Start;
+    if (spec.has_end && !spec.has_start)
+        return SkipDragTarget::End;
+    if (spec.has_start && spec.has_end)
+    {
+        double sx = (spec.start / s_cur_duration) * width;
+        double ex = (spec.end / s_cur_duration) * width;
+        return (fabs(x - sx) <= fabs(x - ex)) ? SkipDragTarget::Start : SkipDragTarget::End;
+    }
+    return SkipDragTarget::None;
+}
+
+static void finish_right_gesture()
+{
+    s_rbtn_down = false;
+    s_edge_gesture_done = false;
+    s_skip_drag = SkipDragTarget::None;
+    s_popup_marker_active = false;
+}
+
+static void apply_edge_swipe(int dir)
+{
+    s_edge_gesture_done = true;
+    s_popup_marker_active = false;
+    s_skip_drag = SkipDragTarget::None;
+    queue_all_draws();
+    if (dir < 0)
+        aud_drct_pl_prev();
+    else
+        aud_drct_pl_next();
+}
+
+static gboolean on_button_press(GtkWidget * widget, GdkEventButton * event, gpointer)
 {
     if (event->button == 3)
     {
-        s_popup_click_x = event->x;
+        GtkAllocation a;
+        gtk_widget_get_allocation(widget, &a);
+
+        // Right-click takes over from an in-progress left-drag seek so we
+        // don't also seek when the left button is later released.
+        s_seeking = false;
+        s_rbtn_down = true;
+        s_rbtn_start_x = event->x;
+        s_edge_gesture_done = false;
+        s_popup_click_x = clamp_widget_x(event->x, a.width);
         s_popup_marker_active = true;
+        s_skip_drag = hit_test_skip_marker(event->x, a.width);
         queue_all_draws();
         return TRUE;
     }
@@ -800,11 +961,42 @@ static gboolean on_button_press(GtkWidget *, GdkEventButton * event, gpointer)
 
 static gboolean on_motion(GtkWidget * widget, GdkEventMotion * event, gpointer)
 {
+    GtkAllocation a;
+    gtk_widget_get_allocation(widget, &a);
+
+    if (s_rbtn_down)
+    {
+        if (!s_edge_gesture_done)
+        {
+            s_popup_click_x = clamp_widget_x(event->x, a.width);
+
+            // Sliding (not a click) attaches the nearest existing SKIP
+            // marker to the pointer so the set line is movable.
+            if (s_skip_drag == SkipDragTarget::None &&
+                fabs(event->x - s_rbtn_start_x) >= SKIP_CLICK_PX)
+            {
+                s_skip_drag = pick_skip_drag_target(s_rbtn_start_x, a.width);
+            }
+
+            // Swipe to either edge (from far enough away that a click near
+            // the edge is still a click) changes track. Fires once per
+            // press so holding the button at the edge after a skip does
+            // not chain through the playlist.
+            double edge = edge_zone_px(a.width);
+            double min_swipe = min_swipe_px(a.width);
+            if (event->x <= edge && (s_rbtn_start_x - event->x) >= min_swipe)
+                apply_edge_swipe(-1);
+            else if (event->x >= a.width - edge && (event->x - s_rbtn_start_x) >= min_swipe)
+                apply_edge_swipe(1);
+            else
+                queue_all_draws();
+        }
+        return TRUE;
+    }
+
     if (!s_seeking)
         return TRUE;
 
-    GtkAllocation a;
-    gtk_widget_get_allocation(widget, &a);
     if (event->x < -100 || event->x > a.width + 100 || event->y < -100 || event->y > a.height + 100)
         s_seeking = false;
     else
@@ -818,6 +1010,38 @@ static gboolean on_button_release(GtkWidget * widget, GdkEventButton * event, gp
 {
     if (event->button == 3)
     {
+        bool fired_edge = s_edge_gesture_done;
+        SkipDragTarget dragged = s_skip_drag;
+        double start_x = s_rbtn_start_x;
+        finish_right_gesture();
+
+        if (fired_edge)
+        {
+            queue_all_draws();
+            return TRUE;
+        }
+
+        GtkAllocation a;
+        gtk_widget_get_allocation(widget, &a);
+        s_popup_click_x = clamp_widget_x(event->x, a.width);
+
+        // Dragging far enough with an existing SKIP line commits the new
+        // position. A click (or tiny movement) still opens the menu, so a
+        // second point can be set from the same spot.
+        double moved = fabs(event->x - start_x);
+        if (moved >= SKIP_CLICK_PX && dragged == SkipDragTarget::None)
+            dragged = pick_skip_drag_target(start_x, a.width);
+        if (moved >= SKIP_CLICK_PX &&
+            (dragged == SkipDragTarget::Start || dragged == SkipDragTarget::End))
+        {
+            s_popup_marker_active = false;
+            skip_set_point(dragged == SkipDragTarget::Start);
+            queue_all_draws();
+            return TRUE;
+        }
+
+        s_popup_marker_active = true;
+        queue_all_draws();
 G_GNUC_BEGIN_IGNORE_DEPRECATIONS
         gtk_menu_popup((GtkMenu *)s_popup, nullptr, nullptr, nullptr, nullptr, 0,
                        gtk_get_current_event_time());
@@ -892,6 +1116,12 @@ static void widget_destroy_cb(GtkWidget *)
 
     s_area = nullptr;
     s_ruler = nullptr;
+
+    s_rbtn_down = false;
+    s_edge_gesture_done = false;
+    s_skip_drag = SkipDragTarget::None;
+    s_popup_marker_active = false;
+    s_seeking = false;
 
     reset_wave();
     s_cur_filename = String();
