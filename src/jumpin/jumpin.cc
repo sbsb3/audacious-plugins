@@ -22,13 +22,14 @@
  *  - DeaDBeeF let external processes trigger the action via
  *    deadbeef->plugin.exec_cmdline (`deadbeef --plugin=jumpin`). Audacious
  *    has no equivalent generic plugin-action IPC. Two routes are provided
- *    instead: (1) the "jumpin activate" hook, which the Global Hotkeys /
- *    Qt Global Hotkeys plugins call for their own "Jump In (Next Track)"
- *    binding -- the normal way to assign a system-wide hotkey; and (2) for
- *    triggering from outside Audacious entirely (a desktop-environment
- *    hotkey, a script), the same timer watches the mtime of a small trigger
- *    file ($XDG_DATA_HOME/audacious/jumpin-trigger) -- bind a hotkey to
- *    `touch` it.
+ *    instead: (1) the "jumpin activate" / "jumpin activate prev" hooks,
+ *    which the Global Hotkeys / Qt Global Hotkeys plugins (next) and the
+ *    waveform seekbar's edge-swipe (next or previous) call -- the normal
+ *    way to assign a system-wide hotkey; and (2) for triggering from
+ *    outside Audacious entirely (a desktop-environment hotkey, a script),
+ *    the same timer watches the mtime of a small trigger file
+ *    ($XDG_DATA_HOME/audacious/jumpin-trigger) -- bind a hotkey to
+ *    `touch` it. The trigger file always jumps to the next track.
  *  - DeaDBeeF read/wrote SKIP and JUMPIN as free-form custom tags via
  *    pl_find_meta(). Audacious's Tuple has no such open key/value store, so
  *    values are kept in a small sidecar file instead -- see tagstore.h.
@@ -145,26 +146,34 @@ static double compute_jump_offset()
     return offset;
 }
 
-static void trigger_jump_in()
+// prev=false jumps to the next track; prev=true to the previous. The
+// deferred seek is the same either way -- it lands on whichever track
+// "playback ready" reports after the playlist move.
+static void trigger_jump_in(bool prev)
 {
     if (!aud_drct_get_playing())
         return;
 
-    // Arm the deferred seek BEFORE requesting the next track, so the
+    // Arm the deferred seek BEFORE requesting the new track, so the
     // "playback ready" handler catches the very first new-track event.
     s_seek_offset = compute_jump_offset();
     s_seek_pending = true;
 
-    aud_drct_pl_next();
+    if (prev)
+        aud_drct_pl_prev();
+    else
+        aud_drct_pl_next();
 }
 
-static void menu_jump_in() { trigger_jump_in(); }
+static void menu_jump_in() { trigger_jump_in(false); }
 
-// Lets the Global Hotkeys plugin (GTK or Qt) invoke Jump In without a direct
-// dependency between the two plugins -- same pattern used for AOSD's
-// "aosd toggle" hook. Also usable by any other plugin/script via
-// hook_call("jumpin activate", nullptr).
-static void hook_jump_in(void *, void *) { trigger_jump_in(); }
+// Lets the Global Hotkeys plugin (GTK or Qt) and the waveform seekbar
+// invoke Jump In without a direct dependency -- same pattern used for
+// AOSD's "aosd toggle" hook. "jumpin activate" is next-track (hotkeys,
+// menu); "jumpin activate prev" is previous-track (waveform left-edge
+// swipe). Also usable by any other plugin/script via hook_call().
+static void hook_jump_in(void *, void *) { trigger_jump_in(false); }
+static void hook_jump_in_prev(void *, void *) { trigger_jump_in(true); }
 
 static void jumpin_playback_ready(void *, void *)
 {
@@ -280,7 +289,7 @@ static void check_trigger_file()
     if (st.st_mtime != s_trigger_seen_mtime)
     {
         s_trigger_seen_mtime = st.st_mtime;
-        trigger_jump_in();
+        trigger_jump_in(false);
     }
 }
 
@@ -387,6 +396,7 @@ bool JumpIn::init()
     hook_associate("playback ready", jumpin_playback_ready, nullptr);
     hook_associate("playback stop", jumpin_playback_stop, nullptr);
     hook_associate("jumpin activate", hook_jump_in, nullptr);
+    hook_associate("jumpin activate prev", hook_jump_in_prev, nullptr);
 
     timer_add(TimerRate::Hz10, jumpin_timer_tick);
 
@@ -411,6 +421,7 @@ void JumpIn::cleanup()
     hook_dissociate("playback ready", jumpin_playback_ready);
     hook_dissociate("playback stop", jumpin_playback_stop);
     hook_dissociate("jumpin activate", hook_jump_in);
+    hook_dissociate("jumpin activate prev", hook_jump_in_prev);
 
     s_seek_pending = false;
     s_skip_end_active = false;
