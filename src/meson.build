@@ -258,6 +258,10 @@ if conf.has('USE_GTK')
   if get_option('vumeter')
     subdir('vumeter')
   endif
+
+  if get_option('waveform')
+    subdir('waveform')
+  endif
 endif
 
 
@@ -270,12 +274,21 @@ if get_option('mac-now-playing') and have_darwin
   subdir('mac-now-playing')
 endif
 
+if get_option('jumpin')
+  subdir('jumpin')
+endif
+
 if get_option('mpris2') and not have_windows
   subdir('mpris2')
 endif
 
 if get_option('scrobbler2')
   subdir('scrobbler2')
+endif
+
+# systemd-logind only; the fd-passing Inhibit call has no Windows equivalent.
+if get_option('sleep-inhibitor') and not have_windows and not have_darwin
+  subdir('sleep-inhibitor')
 endif
 
 if get_option('songchange')

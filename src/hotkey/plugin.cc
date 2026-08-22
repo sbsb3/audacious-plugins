@@ -251,6 +251,13 @@ bool handle_keyevent(EVENT event)
         return true;
     }
 
+    /* Trigger the Jump In plugin's action */
+    if (event == EVENT_JUMP_IN)
+    {
+        hook_call("jumpin activate", nullptr);
+        return true;
+    }
+
     if (event == EVENT_TOGGLE_REPEAT)
     {
         aud_toggle_bool("repeat");

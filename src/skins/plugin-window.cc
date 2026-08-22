@@ -63,7 +63,15 @@ static void add_dock_plugin (PluginHandle * plugin, void * unused)
         GtkWidget * window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
         gtk_window_set_title ((GtkWindow *) window, aud_plugin_get_name (plugin));
         gtk_window_set_role ((GtkWindow *) window, "plugin");
-        gtk_window_set_transient_for ((GtkWindow *) window, (GtkWindow *) mainwin->gtk ());
+        /* Deliberately NOT transient-for the main window: plugin windows like
+         * the waveform seekbar or a spectrum analyzer are often left open on
+         * a second monitor as a persistent, independent panel. Many X11 window
+         * managers (e.g. xfwm4) tie a transient window's iconify state to its
+         * parent's, so minimizing the (skinned) main window would also yank
+         * this window off-screen -- and "Always on Top" from the WM can't
+         * override that, since it's a separate mechanism from transience.
+         * Making the window fully independent lets the WM (and the user's own
+         * window rules) manage it on its own terms. */
         gtk_container_set_border_width ((GtkContainer *) window, 2);
         gtk_container_add ((GtkContainer *) window, widget);
 

@@ -82,6 +82,7 @@ static const QMap<Event, const char *> event_desc = {
     {Event::Raise, N_("Raise player window(s)")},
     {Event::PrevAlbum, N_("Previous album")},
     {Event::NextAlbum, N_("Next album")},
+    {Event::JumpIn, N_("Jump In (Next Track)")},
 };
 
 class LineKeyEdit : public QLineEdit

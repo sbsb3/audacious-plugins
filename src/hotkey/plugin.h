@@ -34,6 +34,8 @@ typedef enum
     EVENT_PREV_ALBUM,
     EVENT_NEXT_ALBUM,
 
+    EVENT_JUMP_IN,
+
     EVENT_MAX
 } EVENT;
 

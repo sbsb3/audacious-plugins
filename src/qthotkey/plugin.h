@@ -38,6 +38,8 @@ enum class Event
     PrevAlbum,
     NextAlbum,
 
+    JumpIn,
+
     Max
 };
 

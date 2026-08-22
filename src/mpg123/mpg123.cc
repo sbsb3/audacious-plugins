@@ -253,6 +253,8 @@ static bool read_mpg123_info(const char * filename, VFSFile & file,
 
     StringBuf fmt = make_format_string(&s.info);
     tuple.set_format(fmt, s.channels, s.rate, s.info.bitrate);
+    if (s.rate > 0)
+        tuple.set_int(Tuple::SampleRate, (int)s.rate);
 
     if (!stream && s.rate > 0)
     {
