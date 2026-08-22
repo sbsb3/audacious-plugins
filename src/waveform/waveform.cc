@@ -7,7 +7,8 @@
  * seek slider, with click/drag-to-seek, scroll-to-seek, a right-click menu
  * to set SKIP trim points (shared with the "jumpin" plugin -- see
  * tagstore.h), right-drag to move the SKIP line, and a right-swipe to
- * either edge to change tracks.
+ * either edge to change tracks (or, with a configurable modifier key held,
+ * to switch to and start playing the previous/next playlist instead).
  *
  * Differences from the DeaDBeeF original, forced by API differences (see
  * the port's plan document for the full analysis):
@@ -51,6 +52,7 @@
 #include <libaudcore/hook.h>
 #include <libaudcore/i18n.h>
 #include <libaudcore/plugin.h>
+#include <libaudcore/playlist.h>
 #include <libaudcore/preferences.h>
 #include <libaudcore/runtime.h>
 
@@ -202,6 +204,7 @@ static const char * const waveform_defaults[] = {
     "cache_enabled", "TRUE",
     "scroll_enabled", "TRUE",
     "swipe_jump_in", "FALSE",
+    "swipe_playlist_modifier", "0",
     "num_samples", "3000",
     "max_file_minutes", "60",
     // The original hardcoded this at 8pt, which reads as nearly illegible at
@@ -241,12 +244,27 @@ static const PreferencesWidget display_page[] = {
     WidgetCheck(N_("Downmix to mono"), WidgetBool("waveform", "mix_to_mono")),
 };
 
+static const ComboItem swipe_modifier_options[] = {
+    ComboItem(N_("None (switch track in the current playlist)"), 0),
+    ComboItem(N_("Shift"), 1),
+    ComboItem(N_("Ctrl"), 2),
+    ComboItem(N_("Alt"), 3),
+    ComboItem(N_("Super"), 4),
+};
+
 static const PreferencesWidget behavior_page[] = {
     WidgetCheck(N_("Seek with scroll wheel"), WidgetBool("waveform", "scroll_enabled")),
     WidgetCheck(N_("Use Jump In when swiping to previous/next track"),
                 WidgetBool("waveform", "swipe_jump_in")),
     WidgetLabel(N_("Requires the Jump In plugin. Swiping to either edge then "
                    "lands in the new track at the configured Jump In offset."),
+                WIDGET_CHILD),
+    WidgetCombo(N_("Held while edge-swiping, switch playlist instead:"),
+                WidgetInt("waveform", "swipe_playlist_modifier"),
+                {{swipe_modifier_options}}),
+    WidgetLabel(N_("Swiping to either edge while holding this key switches to the "
+                   "previous/next playlist and starts playing it, instead of "
+                   "changing tracks within the current playlist."),
                 WIDGET_CHILD),
     WidgetLabel(N_("<b>Peak cache</b>")),
     WidgetCheck(N_("Cache decoded waveforms on disk"), WidgetBool("waveform", "cache_enabled")),
@@ -947,12 +965,50 @@ static bool jumpin_plugin_enabled()
     return plugin && aud_plugin_get_enabled(plugin);
 }
 
-static void apply_edge_swipe(int dir)
+// Maps the "swipe_playlist_modifier" pref (see behavior_page) to the actual
+// GDK modifier bit it stands for. 0 means the feature is off.
+static GdkModifierType swipe_playlist_mask()
+{
+    switch (aud_get_int("waveform", "swipe_playlist_modifier"))
+    {
+    case 1: return GDK_SHIFT_MASK;
+    case 2: return GDK_CONTROL_MASK;
+    case 3: return GDK_MOD1_MASK;
+    case 4: return GDK_SUPER_MASK;
+    default: return (GdkModifierType)0;
+    }
+}
+
+// Switches to the previous/next playlist (wrapping around) and starts it
+// playing, rather than just changing tracks within the current playlist.
+static void switch_playlist_and_play(int dir)
+{
+    int n = Playlist::n_playlists();
+    if (n <= 0)
+        return;
+
+    int idx = Playlist::active_playlist().index();
+    if (idx < 0)
+        idx = 0;
+
+    Playlist next = Playlist::by_index(((idx + dir) % n + n) % n);
+    next.activate();
+    next.start_playback();
+}
+
+static void apply_edge_swipe(int dir, guint event_state)
 {
     s_edge_gesture_done = true;
     s_popup_marker_active = false;
     s_skip_drag = SkipDragTarget::None;
     queue_all_draws();
+
+    GdkModifierType mod = swipe_playlist_mask();
+    if (mod && (event_state & mod) == (guint)mod)
+    {
+        switch_playlist_and_play(dir);
+        return;
+    }
 
     // Jump In owns the randomized-offset seek; the waveform plugin just
     // asks it to fire (next or previous) when the pref is on and the
@@ -1023,9 +1079,9 @@ static gboolean on_motion(GtkWidget * widget, GdkEventMotion * event, gpointer)
             double edge = edge_zone_px(a.width);
             double min_swipe = min_swipe_px(a.width);
             if (event->x <= edge && (s_rbtn_start_x - event->x) >= min_swipe)
-                apply_edge_swipe(-1);
+                apply_edge_swipe(-1, event->state);
             else if (event->x >= a.width - edge && (event->x - s_rbtn_start_x) >= min_swipe)
-                apply_edge_swipe(1);
+                apply_edge_swipe(1, event->state);
             else
                 queue_all_draws();
         }
