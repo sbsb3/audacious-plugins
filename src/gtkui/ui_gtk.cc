@@ -60,6 +60,7 @@ static const char * const gtkui_defaults[] = {
     "playlist_headers", "TRUE",
     "playlist_headers_sortable", "TRUE",
     "show_remaining_time", "FALSE",
+    "custom_sort_keys", "",
 
 #ifdef USE_GTK3
     "symbolic_icons", "TRUE",

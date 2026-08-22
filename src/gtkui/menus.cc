@@ -138,6 +138,7 @@ static const AudguiMenuItem sort_items[] = {
     MenuCommand (N_("By Bitrate"), nullptr, NONE, sort_bitrate),
     MenuCommand (N_("By File Created"), nullptr, NONE, sort_file_created),
     MenuCommand (N_("By File Modified"), nullptr, NONE, sort_file_modified),
+    MenuCommand (N_("C_ustom Order ..."), nullptr, NONE, sort_custom_scheme),
     MenuSep (),
     MenuCommand (N_("R_everse Order"), "view-sort-descending", NONE, sort_reverse),
     MenuCommand (N_("_Random Order"), nullptr, NONE, sort_random)
@@ -159,6 +160,7 @@ static const AudguiMenuItem sort_sel_items[] = {
     MenuCommand (N_("By Bitrate"), nullptr, NONE, sort_sel_bitrate),
     MenuCommand (N_("By File Created"), nullptr, NONE, sort_sel_file_created),
     MenuCommand (N_("By File Modified"), nullptr, NONE, sort_sel_file_modified),
+    MenuCommand (N_("C_ustom Order ..."), nullptr, NONE, sort_sel_custom_scheme),
     MenuSep (),
     MenuCommand (N_("R_everse Order"), "view-sort-descending", NONE, sort_sel_reverse),
     MenuCommand (N_("_Random Order"), nullptr, NONE, sort_sel_random)
