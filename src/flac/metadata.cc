@@ -367,6 +367,9 @@ bool FLACng::read_tag (const char * filename, VFSFile & file, Tuple & tuple, Ind
 
                 if (metadata->data.stream_info.channels > 0)
                     tuple.set_int(Tuple::Channels, metadata->data.stream_info.channels);
+
+                if (metadata->data.stream_info.sample_rate > 0)
+                    tuple.set_int(Tuple::SampleRate, metadata->data.stream_info.sample_rate);
                 break;
             }
 

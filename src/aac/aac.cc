@@ -271,6 +271,8 @@ bool AACDecoder::read_tag (const char * filename, VFSFile & file, Tuple & tuple,
         tuple.set_int (Tuple::Bitrate, bitrate);
     if (channels > 0)
         tuple.set_int (Tuple::Channels, channels);
+    if (samplerate > 0)
+        tuple.set_int (Tuple::SampleRate, samplerate);
 
     tuple.fetch_stream_info (file);
 

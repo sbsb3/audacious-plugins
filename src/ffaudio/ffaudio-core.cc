@@ -385,6 +385,8 @@ bool FFaudio::read_tag (const char * filename, VFSFile & file, Tuple & tuple, In
 
     if (cinfo.codec->long_name)
         tuple.set_str (Tuple::Codec, cinfo.codec->long_name);
+    if (cinfo.stream->codecpar && cinfo.stream->codecpar->sample_rate > 0)
+        tuple.set_int (Tuple::SampleRate, cinfo.stream->codecpar->sample_rate);
 
     if (ic->metadata)
         read_metadata_dict (tuple, ic->metadata);
