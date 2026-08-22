@@ -147,3 +147,6 @@ void pl_open_folder ()
         g_error_free (error);
     }
 }
+
+void sort_custom_scheme () { audgui_show_sort_by_fields (false); }
+void sort_sel_custom_scheme () { audgui_show_sort_by_fields (true); }

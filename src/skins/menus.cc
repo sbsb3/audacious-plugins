@@ -214,7 +214,8 @@ static const AudguiMenuItem sort_items[] = {
     MenuCommand (N_("By Disc Number"), nullptr, NO_KEY, sort_disc),
     MenuCommand (N_("By Bitrate"), nullptr, NO_KEY, sort_bitrate),
     MenuCommand (N_("By File Created"), nullptr, NO_KEY, sort_file_created),
-    MenuCommand (N_("By File Modified"), nullptr, NO_KEY, sort_file_modified)
+    MenuCommand (N_("By File Modified"), nullptr, NO_KEY, sort_file_modified),
+    MenuCommand (N_("Custom Order ..."), nullptr, NO_KEY, sort_custom_scheme)
 };
 
 static const AudguiMenuItem sort_selected_items[] = {
@@ -233,7 +234,8 @@ static const AudguiMenuItem sort_selected_items[] = {
     MenuCommand (N_("By Disc Number"), nullptr, NO_KEY, sort_sel_disc),
     MenuCommand (N_("By Bitrate"), nullptr, NO_KEY, sort_sel_bitrate),
     MenuCommand (N_("By File Created"), nullptr, NO_KEY, sort_sel_file_created),
-    MenuCommand (N_("By File Modified"), nullptr, NO_KEY, sort_sel_file_modified)
+    MenuCommand (N_("By File Modified"), nullptr, NO_KEY, sort_sel_file_modified),
+    MenuCommand (N_("Custom Order ..."), nullptr, NO_KEY, sort_sel_custom_scheme)
 };
 
 static const AudguiMenuItem playlist_sort_items[] = {
