@@ -19,6 +19,7 @@
 */
 
 #include <glib.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <libaudcore/drct.h>
@@ -30,6 +31,217 @@
 #include "aosd_trigger_private.h"
 #include "aosd_cfg.h"
 #include "aosd_osd.h"
+
+/* Case-insensitive strstr(), since plain strcasestr() isn't standard. */
+static const char * aosd_strcasestr (const char * haystack, const char * needle)
+{
+  size_t needle_len = strlen (needle);
+  for (const char * p = haystack; * p; p ++)
+  {
+    if (! g_ascii_strncasecmp (p, needle, needle_len))
+      return p;
+  }
+  return nullptr;
+}
+
+/* Decoders spell out codec names very differently -- e.g. the built-in FLAC
+ * plugin sets "Free Lossless Audio Codec (FLAC)", ffmpeg's long_name is
+ * "FLAC (Free Lossless Audio Codec)", and mpg123 gives "MPEG-1 layer 3".
+ * This maps such names down to the short form most people actually use
+ * (FLAC, MP3, AAC, ...), falling back to the original string unchanged if
+ * nothing recognizable is found. */
+static StringBuf aosd_trigger_alias_codec (const char * codec)
+{
+  /* "MPEG-<version> layer <n>" (mpg123) */
+  const char * mpeg = aosd_strcasestr (codec, "mpeg");
+  const char * layer = mpeg ? aosd_strcasestr (mpeg, "layer") : nullptr;
+  if (layer)
+  {
+    int n = atoi (layer + strlen ("layer"));
+    if (n >= 1 && n <= 3)
+      return str_printf ("MP%d", n);
+  }
+
+  /* "SHORT (long description)", e.g. ffmpeg's "FLAC (Free Lossless ...)" */
+  const char * open_paren = strchr (codec, '(');
+  if (open_paren && open_paren > codec && open_paren[-1] == ' ')
+  {
+    StringBuf lead = str_copy (codec, open_paren - 1 - codec);
+    if (lead.len () > 0 && lead.len () <= 8 && ! strpbrk (lead, " \t("))
+      return lead;
+  }
+
+  /* "long description (SHORT)", e.g. the built-in flac plugin */
+  int len = strlen (codec);
+  if (len > 2 && codec[len - 1] == ')')
+  {
+    const char * last_open = strrchr (codec, '(');
+    if (last_open && last_open > codec && last_open[-1] == ' ')
+    {
+      StringBuf trail = str_copy (last_open + 1, codec + len - 1 - (last_open + 1));
+      if (trail.len () > 0 && trail.len () <= 8 && ! strpbrk (trail, " \t("))
+        return trail;
+    }
+  }
+
+  /* plain names with no parenthesized short form */
+  static const struct { const char * needle; const char * alias; } known[] =
+  {
+    { "opus", "Opus" },
+    { "vorbis", "Vorbis" },
+    { "flac", "FLAC" },
+    { "wavpack", "WavPack" },
+    { "monkey", "APE" },
+    { "musepack", "MPC" },
+    { "true audio", "TTA" },
+    { "trueaudio", "TTA" },
+    { "windows media", "WMA" },
+    { "apple lossless", "ALAC" },
+    { "advanced audio coding", "AAC" },
+    { "aac", "AAC" },
+    { "mpeg audio layer 3", "MP3" },
+    { "mpeg audio layer 2", "MP2" },
+    { "mpeg audio layer 1", "MP1" },
+  };
+
+  for (auto & k : known)
+  {
+    if (aosd_strcasestr (codec, k.needle))
+      return str_copy (k.alias);
+  }
+
+  return str_copy (codec);
+}
+
+/* One entry of the tiny template language used to render
+   aosd_cfg_osd_text_t::format (see aosd_cfg.h for the token syntax). */
+typedef StringBuf (* aosd_format_transform_t) (const char * value);
+
+typedef struct
+{
+  const char * name;
+  Tuple::Field field;
+  bool is_int; /* true for fields read with get_int() (e.g. bitrate) */
+  aosd_format_transform_t transform; /* optional post-processing, or nullptr */
+}
+aosd_format_field_t;
+
+static const aosd_format_field_t aosd_format_fields[] =
+{
+  { "title",   Tuple::Title,   false, nullptr },
+  { "artist",  Tuple::Artist,  false, nullptr },
+  { "album",   Tuple::Album,   false, nullptr },
+  { "codec",   Tuple::Codec,   false, aosd_trigger_alias_codec },
+  { "quality", Tuple::Quality, false, nullptr },
+  { "bitrate", Tuple::Bitrate, true,  nullptr },
+};
+
+/* If <s> starts with "<fieldname>%", appends the field's value (if any) to
+ * <line> and returns a pointer just past the closing '%'.  Sets *had_value
+ * if the field actually had a (non-empty / positive) value.  Returns
+ * nullptr, leaving <line> untouched, if <s> does not name a known field. */
+static const char * aosd_trigger_format_field (const char * s, const Tuple & tuple,
+ GString * line, bool * had_value)
+{
+  for (const aosd_format_field_t & f : aosd_format_fields)
+  {
+    size_t len = strlen (f.name);
+    if (! strncmp (s, f.name, len) && s[len] == '%')
+    {
+      if (f.is_int)
+      {
+        int value = tuple.get_int (f.field);
+        if (value > 0)
+        {
+          g_string_append_printf (line, "%d", value);
+          * had_value = true;
+        }
+      }
+      else
+      {
+        String value = tuple.get_str (f.field);
+        if (value && value[0])
+        {
+          if (f.transform)
+          {
+            StringBuf alias = f.transform (value);
+            g_string_append (line, alias);
+          }
+          else
+            g_string_append (line, value);
+          * had_value = true;
+        }
+      }
+      return s + len + 1;
+    }
+  }
+  return nullptr;
+}
+
+/* Renders <format> (see aosd_cfg.h for the token syntax) against <tuple>.
+ * A line that consists solely of tokens which all turned out empty (e.g.
+ * "%bitrate% kbps" when bitrate is unknown) is dropped, so that fields the
+ * current song lacks don't leave blank or dangling lines behind.  Returns a
+ * newly allocated string; the caller must g_free() it. */
+static char * aosd_trigger_format_text (const Tuple & tuple, const char * format)
+{
+  GString * result = g_string_new (nullptr);
+  GString * line = g_string_new (nullptr);
+  bool line_has_token = false;
+  bool line_has_value = false;
+
+  auto flush_line = [&] ()
+  {
+    if (! line_has_token || line_has_value)
+    {
+      if (result->len)
+        g_string_append_c (result, '\n');
+      g_string_append (result, line->str);
+    }
+    g_string_truncate (line, 0);
+    line_has_token = false;
+    line_has_value = false;
+  };
+
+  for (const char * s = format; * s; )
+  {
+    if (s[0] == '\\' && s[1] == 'n')
+    {
+      flush_line ();
+      s += 2;
+    }
+    else if (s[0] == '%' && s[1] == '%')
+    {
+      g_string_append_c (line, '%');
+      s += 2;
+    }
+    else if (s[0] == '%')
+    {
+      bool had_value = false;
+      const char * next = aosd_trigger_format_field (s + 1, tuple, line, & had_value);
+      if (next)
+      {
+        line_has_token = true;
+        line_has_value = line_has_value || had_value;
+        s = next;
+      }
+      else
+      {
+        g_string_append_c (line, * s);
+        s ++;
+      }
+    }
+    else
+    {
+      g_string_append_c (line, * s);
+      s ++;
+    }
+  }
+  flush_line ();
+
+  g_string_free (line, true);
+  return g_string_free (result, false); /* caller owns the returned string */
+}
 
 /* prototypes of trigger functions */
 static void aosd_trigger_func_pb_start_onoff ( bool );
@@ -132,9 +344,11 @@ aosd_trigger_func_pb_start_onoff ( bool turn_on )
 static void
 aosd_trigger_func_pb_start_cb(void * hook_data, void * user_data)
 {
-  String title = aud_drct_get_title ();
+  Tuple tuple = aud_drct_get_tuple ();
+  char * text = aosd_trigger_format_text (tuple, global_config.text.format);
   char * markup = g_markup_printf_escaped ("<span font_desc='%s'>%s</span>",
-   (const char *) global_config.text.fonts_name[0], (const char *) title);
+   (const char *) global_config.text.fonts_name[0], text);
+  g_free (text);
 
   aosd_osd_display (markup, & global_config, false);
   g_free (markup);
@@ -186,11 +400,11 @@ aosd_trigger_func_pb_titlechange_cb ( void * plentry_gp , void * prevs_gp )
       {
         if (pl_entry_title && strcmp (pl_entry_title, prevs->title))
         {
-          /* string formatting is done here a.t.m. - TODO - improve this area */
+          char * text = aosd_trigger_format_text (pl_entry_tuple, global_config.text.format);
           char * markup = g_markup_printf_escaped
            ("<span font_desc='%s'>%s</span>",
-           (const char *) global_config.text.fonts_name[0],
-           (const char *) pl_entry_title);
+           (const char *) global_config.text.fonts_name[0], text);
+          g_free (text);
 
           aosd_osd_display (markup, & global_config, false);
           g_free (markup);
@@ -255,11 +469,12 @@ aosd_trigger_func_pb_pauseoff_cb ( void * unused1 , void * unused2 )
   time_tot_s = time_tot % 60;
   time_tot_m = (time_tot - time_tot_s) / 60;
 
-  String title = tuple.get_str (Tuple::FormattedTitle);
+  char * text = aosd_trigger_format_text (tuple, global_config.text.format);
   char * markup = g_markup_printf_escaped
    ("<span font_desc='%s'>%s (%i:%02i/%i:%02i)</span>",
-   (const char *) global_config.text.fonts_name[0], (const char *) title,
+   (const char *) global_config.text.fonts_name[0], text,
    time_cur_m, time_cur_s, time_tot_m, time_tot_s);
+  g_free (text);
 
   aosd_osd_display (markup, & global_config, false);
   g_free (markup);

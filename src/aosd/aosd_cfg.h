@@ -26,6 +26,11 @@
 /* in this release only one user font is supported */
 #define AOSD_TEXT_FONTS_NUM 1
 
+/* default template for aosd_cfg_osd_text_t::format; the doubled backslash
+ * yields the two literal characters '\' 'n' in the stored string, which
+ * aosd_trigger_format_text() treats as a line break */
+#define AOSD_TEXT_DEFAULT_FORMAT "%title%\\nby %artist%\\n%codec%, %bitrate% kbps"
+
 /* transparency mode values */
 #define AOSD_MISC_TRANSPARENCY_FAKE 0
 #define AOSD_MISC_TRANSPARENCY_REAL 1
@@ -89,6 +94,12 @@ typedef struct
   aosd_color_t fonts_color[AOSD_TEXT_FONTS_NUM];
   bool fonts_draw_shadow[AOSD_TEXT_FONTS_NUM];
   aosd_color_t fonts_shadow_color[AOSD_TEXT_FONTS_NUM];
+
+  /* Template controlling what song information is shown in the OSD.
+   * Recognized tokens: %title% %artist% %album% %codec% %quality%
+   * %bitrate%.  "%%" inserts a literal '%' and "\n" (backslash, n)
+   * starts a new line.  See aosd_trigger_format_text() for details. */
+  String format;
 }
 aosd_cfg_osd_text_t;
 

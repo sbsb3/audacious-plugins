@@ -55,6 +55,7 @@ static const char * const aosd_defaults[] = {
  "text_fonts_color_0", "65535,65535,65535,65535",
  "text_fonts_draw_shadow_0", "TRUE",
  "text_fonts_shadow_color_0", "0,0,0,32767",
+ "text_format", AOSD_TEXT_DEFAULT_FORMAT,
  "decoration_code", "0",
  "decoration_color_0", "0,0,65535,32767",
  "decoration_color_1", "65535,65535,65535,65535",
@@ -95,6 +96,8 @@ void aosd_cfg_load (aosd_cfg_t & cfg)
     snprintf (key_str, sizeof key_str, "text_fonts_shadow_color_%i", i);
     cfg.text.fonts_shadow_color[i] = str_to_color (aud_get_str ("aosd", key_str));
   }
+
+  cfg.text.format = aud_get_str ("aosd", "text_format");
 
   /* decoration */
   cfg.decoration.code = aud_get_int ("aosd", "decoration_code");
@@ -148,6 +151,8 @@ void aosd_cfg_save (const aosd_cfg_t & cfg)
     snprintf (key_str, sizeof key_str, "text_fonts_shadow_color_%i", i);
     aud_set_str ("aosd", key_str, color_to_str (cfg.text.fonts_shadow_color[i]));
   }
+
+  aud_set_str ("aosd", "text_format", cfg.text.format);
 
   /* decoration */
   aud_set_int ("aosd" ,

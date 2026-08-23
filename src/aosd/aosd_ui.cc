@@ -426,6 +426,20 @@ aosd_cb_configure_text_font_commit ( GtkWidget * fontbt , aosd_cfg_t * cfg )
 #endif
 
 
+static void
+aosd_cb_configure_text_format_commit ( GtkWidget * entry , aosd_cfg_t * cfg )
+{
+  cfg->text.format = String (gtk_entry_get_text (GTK_ENTRY (entry)));
+}
+
+
+static void
+aosd_cb_configure_text_format_reset ( GtkWidget * button , void * entry )
+{
+  gtk_entry_set_text (GTK_ENTRY (entry), AOSD_TEXT_DEFAULT_FORMAT);
+}
+
+
 static GtkWidget *
 aosd_ui_configure_text ( aosd_cfg_t * cfg )
 {
@@ -434,6 +448,8 @@ aosd_ui_configure_text ( aosd_cfg_t * cfg )
   GtkWidget *tex_font_label[3], *tex_font_fontbt[3];
   GtkWidget *tex_font_colorbt[3], *tex_font_shadow_togglebt[3];
   GtkWidget *tex_font_shadow_colorbt[3];
+  GtkWidget *tex_format_frame, *tex_format_vbox, *tex_format_hbox;
+  GtkWidget *tex_format_entry, *tex_format_reset_bt, *tex_format_hint;
   int i = 0;
 
   tex_vbox = audgui_vbox_new( 4 );
@@ -503,6 +519,40 @@ aosd_ui_configure_text ( aosd_cfg_t * cfg )
   }
   gtk_container_add( GTK_CONTAINER(tex_font_frame) , tex_font_grid );
   gtk_box_pack_start( GTK_BOX(tex_vbox) , tex_font_frame , false , false , 0 );
+
+  /* song info format */
+  tex_format_frame = gtk_frame_new( _("Song Info") );
+  tex_format_vbox = audgui_vbox_new( 4 );
+  gtk_container_set_border_width( GTK_CONTAINER(tex_format_vbox) , 6 );
+  gtk_container_add( GTK_CONTAINER(tex_format_frame) , tex_format_vbox );
+
+  tex_format_hbox = audgui_hbox_new( 4 );
+  tex_format_entry = gtk_entry_new();
+  gtk_entry_set_text( GTK_ENTRY(tex_format_entry) , cfg->text.format );
+  gtk_box_pack_start( GTK_BOX(tex_format_hbox) , tex_format_entry , true , true , 0 );
+
+  tex_format_reset_bt = gtk_button_new_with_label( _("Reset") );
+  g_signal_connect( G_OBJECT(tex_format_reset_bt) , "clicked" ,
+                    G_CALLBACK(aosd_cb_configure_text_format_reset) , tex_format_entry );
+  gtk_box_pack_start( GTK_BOX(tex_format_hbox) , tex_format_reset_bt , false , false , 0 );
+
+  gtk_box_pack_start( GTK_BOX(tex_format_vbox) , tex_format_hbox , false , false , 0 );
+
+  tex_format_hint = gtk_label_new(
+    _("Fields: %title% %artist% %album% %codec% %quality% %bitrate%\n"
+      "Use \\n for a new line and %% for a literal percent sign.\n"
+      "A line whose only content is an unavailable field is left out automatically.") );
+  gtk_label_set_line_wrap( GTK_LABEL(tex_format_hint) , true );
+#ifdef USE_GTK3
+  gtk_widget_set_halign( tex_format_hint , GTK_ALIGN_START );
+#else
+  gtk_misc_set_alignment( GTK_MISC(tex_format_hint) , 0.0 , 0.0 );
+#endif
+  gtk_box_pack_start( GTK_BOX(tex_format_vbox) , tex_format_hint , false , false , 0 );
+
+  aosd_cb_list.append( tex_format_entry , aosd_cb_configure_text_format_commit );
+
+  gtk_box_pack_start( GTK_BOX(tex_vbox) , tex_format_frame , false , false , 0 );
 
   return tex_vbox;
 }
