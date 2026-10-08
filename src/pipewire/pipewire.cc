@@ -114,6 +114,7 @@ private:
     bool m_inited = false;
     bool m_has_sinks = false;
     bool m_ignore_state_change = false;
+    bool m_drained = false;
 
     int m_aud_format = 0;
     int m_core_init_seq = 0;
@@ -205,19 +206,42 @@ void PipeWireOutput::drain()
 {
     pw_thread_loop_lock(m_loop);
 
-    int buflen;
-    while ((buflen = m_buffer.len()) > 0)
+    // Give the stream extra time to start up, since a short file that
+    // fits into the buffer completely is drained right after opening.
+    struct timespec deadline;
+    pw_thread_loop_get_time(m_loop, &deadline, 2 * SPA_NSEC_PER_SEC);
+
+    int buflen = m_buffer.len();
+    while (buflen > 0)
     {
-        pw_thread_loop_timed_wait(m_loop, 1);
-        if (buflen <= m_buffer.len())
+        int res = pw_thread_loop_timed_wait_full(m_loop, &deadline);
+        int remaining = m_buffer.len();
+
+        // State changes can wake us before the process callback consumes data.
+        // Only restart the timeout when the buffer actually makes progress.
+        if (remaining < buflen)
+            pw_thread_loop_get_time(m_loop, &deadline, SPA_NSEC_PER_SEC);
+        else if (res < 0)
         {
-            AUDERR("PipeWireOutput: buffer drain lock\n");
-            break;
+            // The stream is stuck, no need to wait for on_drained()
+            AUDERR("PipeWireOutput: buffer drain timeout\n");
+            pw_thread_loop_unlock(m_loop);
+            return;
         }
+
+        buflen = remaining;
     }
 
+    m_drained = false;
     pw_stream_flush(m_stream, true);
-    pw_thread_loop_timed_wait(m_loop, 1); // trigger on_drained() callback
+
+    pw_thread_loop_get_time(m_loop, &deadline, SPA_NSEC_PER_SEC);
+    while (!m_drained)
+    {
+        if (pw_thread_loop_timed_wait_full(m_loop, &deadline) < 0)
+            break;
+    }
+
     pw_thread_loop_unlock(m_loop);
 }
 
@@ -225,8 +249,8 @@ void PipeWireOutput::flush()
 {
     pw_thread_loop_lock(m_loop);
     m_buffer.discard();
-    pw_thread_loop_unlock(m_loop);
     pw_stream_flush(m_stream, false);
+    pw_thread_loop_unlock(m_loop);
 }
 
 void PipeWireOutput::period_wait()
@@ -473,9 +497,13 @@ bool PipeWireOutput::connect_stream(enum spa_audio_format format)
     const struct spa_pod * params[1];
     params[0] = spa_format_audio_raw_build(&b, SPA_PARAM_EnumFormat, &audio_info);
 
-    auto stream_flags = static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT |
-                                                     PW_STREAM_FLAG_MAP_BUFFERS |
-                                                     PW_STREAM_FLAG_RT_PROCESS);
+    auto stream_flags = static_cast<pw_stream_flags>(
+        PW_STREAM_FLAG_AUTOCONNECT |
+#if PW_CHECK_VERSION(0, 3, 81)
+        PW_STREAM_FLAG_EARLY_PROCESS |
+#endif
+        PW_STREAM_FLAG_MAP_BUFFERS
+    );
 
     return pw_stream_connect(m_stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
                              stream_flags, params, aud::n_elems(params)) == 0;
@@ -573,6 +601,7 @@ void PipeWireOutput::on_process(void * data)
 void PipeWireOutput::on_drained(void * data)
 {
     PipeWireOutput * o = static_cast<PipeWireOutput *>(data);
+    o->m_drained = true;
     pw_thread_loop_signal(o->m_loop, false);
 }
 
